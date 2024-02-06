@@ -13,10 +13,22 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::TryRecvError;
 
-pub struct DiscardServer {}
+pub struct DiscardServer {
+    tcp_listener: TcpListener,
+}
 
 impl DiscardServer {
-    pub fn new(address: &str) -> Result<()> {
+    pub fn new(address: &str) -> Result<Self> {
+        let tcp_listener = TcpListener::bind(address)?;
+
+        tcp_listener.set_nonblocking(true)?;
+
+        Ok(DiscardServer {
+            tcp_listener: tcp_listener,
+        })
+    }
+
+    pub fn run(self) {
         let (listener_reader_tx, listener_reader_rx): (
             Sender<TcpConnection>,
             Receiver<TcpConnection>,
@@ -29,16 +41,16 @@ impl DiscardServer {
 
         let mut listener: Pin<&mut Coroutine> =
             pin!(DiscardServer::listener_coroutine(
+                self.tcp_listener,
                 listener_reader_tx.clone(),
-                address,
-            )?);
+            ));
 
         let mut reader: Pin<&mut Coroutine> =
             pin!(DiscardServer::reader_coroutine(
                 listener_reader_rx,
                 reader_handler_tx.clone(),
                 listener_reader_tx.clone(),
-            )?);
+            ));
 
         loop {
             listener.as_mut().resume(());
@@ -47,15 +59,11 @@ impl DiscardServer {
     }
 
     fn listener_coroutine(
+        tcp_listener: TcpListener,
         tx: Sender<TcpConnection>,
-        address: &str,
-    ) -> Result<Coroutine> {
-        let listener: TcpListener = TcpListener::bind(address)?;
-
-        listener.set_nonblocking(true)?;
-
+    ) -> Coroutine {
         let coroutine = move || loop {
-            match listener.accept() {
+            match tcp_listener.accept() {
                 Ok((stream, client)) => {
                     println!("accepted connection from {client}");
 
@@ -74,14 +82,14 @@ impl DiscardServer {
             yield;
         };
 
-        Ok(Box::pin(coroutine))
+        Box::pin(coroutine)
     }
 
     fn reader_coroutine(
         rx: Receiver<TcpConnection>,
         tx_string: Sender<String>,
         tx: Sender<TcpConnection>,
-    ) -> Result<Coroutine> {
+    ) -> Coroutine {
         let coroutine = move || loop {
             let (mut buffer, client): TcpConnection;
 
@@ -127,7 +135,7 @@ impl DiscardServer {
             yield;
         };
 
-        Ok(Box::pin(coroutine))
+        Box::pin(coroutine)
     }
 }
 
@@ -140,15 +148,17 @@ mod tests {
 
     #[test]
     fn test_discard_server() {
-        const N_CLIENTS: u8 = 255;
+        const N_CLIENTS: u8 = u8::MAX;
 
         const ADDRESS: &str = "127.6.8.3:5009";
 
-        thread::spawn(|| match DiscardServer::new(ADDRESS) {
-            Ok(()) => {}
+        let server: DiscardServer = match DiscardServer::new(ADDRESS) {
+            Ok(server) => server,
 
             Err(error) => panic!("{error}"),
-        });
+        };
+
+        thread::spawn(move || server.run());
 
         for _ in 0..N_CLIENTS {
             let mut client: TcpStream;

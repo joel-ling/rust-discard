@@ -9,9 +9,11 @@ use crate::discard_server::DiscardServer;
 fn main() {
     const ADDRESS: &str = "localhost:5009";
 
-    match DiscardServer::new(ADDRESS) {
-        Ok(()) => {}
+    let server = match DiscardServer::new(ADDRESS) {
+        Ok(server) => server,
 
         Err(error) => panic!("{error}"),
-    }
+    };
+
+    server.run();
 }
